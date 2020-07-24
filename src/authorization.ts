@@ -5,6 +5,8 @@ import {
   AddressHashMode,
   PubKeyEncoding,
   RECOVERABLE_ECDSA_SIG_LENGTH_BYTES,
+  SingleSigHashMode,
+  MultiSigHashMode,
 } from './constants';
 
 import { BufferArray, txidFromData, sha512_256, leftPadHex } from './utils';
@@ -23,6 +25,7 @@ import {
 import * as BigNum from 'bn.js';
 import { BufferReader } from './bufferReader';
 import { SerializationError, NotImplementedError, DeserializationError } from './errors';
+import { Buffer } from 'buffer';
 
 abstract class Deserializable {
   abstract serialize(): Buffer;
@@ -74,212 +77,204 @@ export class MessageSignature extends Deserializable {
   }
 }
 
-export class SpendingCondition extends Deserializable {
-  addressHashMode?: AddressHashMode;
-  signerAddress?: Address;
-  nonce?: BigNum;
-  fee?: BigNum;
-  pubKeyEncoding?: PubKeyEncoding;
+type TransactionAuthField = StacksPublicKey | MessageSignature;
+
+export interface SingleSigSpendingCondition {
+  hashMode: SingleSigHashMode;
+  signer: Address;
+  nonce: BigNum;
+  fee: BigNum;
+  keyEncoding: PubKeyEncoding;
   signature: MessageSignature;
-  signaturesRequired?: number;
+}
 
-  constructor(addressHashMode?: AddressHashMode, pubKey?: string, nonce?: BigNum, fee?: BigNum) {
-    super();
-    this.addressHashMode = addressHashMode;
-    if (addressHashMode !== undefined && pubKey) {
-      this.signerAddress = addressFromPublicKeys(0, addressHashMode, 1, [
-        createStacksPublicKey(pubKey),
-      ]);
-    }
-    this.nonce = nonce;
-    this.fee = fee;
-    if (pubKey) {
-      this.pubKeyEncoding = isCompressed(createStacksPublicKey(pubKey))
-        ? PubKeyEncoding.Compressed
-        : PubKeyEncoding.Uncompressed;
-    }
-    this.signature = MessageSignature.empty();
+export interface MultiSigSpendingCondition {
+  hashMode: MultiSigHashMode;
+  signer: Address;
+  nonce: BigNum;
+  fee: BigNum;
+  fields: TransactionAuthField[];
+  signaturesRequired: number;
+}
+
+export type SpendingCondition = SingleSigSpendingCondition | MultiSigSpendingCondition;
+
+export function createSingleSigSpendingCondition(
+  hashMode: SingleSigHashMode,
+  pubKey: string,
+  nonce: BigNum,
+  fee: BigNum
+): SingleSigSpendingCondition {
+  const signer = addressFromPublicKeys(0, hashMode, 1, [createStacksPublicKey(pubKey)]);
+  const keyEncoding = isCompressed(createStacksPublicKey(pubKey))
+    ? PubKeyEncoding.Compressed
+    : PubKeyEncoding.Uncompressed;
+
+  return {
+    hashMode,
+    signer,
+    nonce,
+    fee,
+    keyEncoding,
+    signature: MessageSignature.empty(),
+  };
+}
+
+function isSingleSig(condition: SpendingCondition) {
+  return 'signature' in condition;
+}
+
+function clearCondition(condition: SpendingCondition): SpendingCondition {
+  const cloned = _.cloneDeep(condition);
+  cloned.nonce = new BigNum(0);
+  cloned.fee = new BigNum(0);
+
+  if (isSingleSig(cloned)) {
+    (cloned as SingleSigSpendingCondition).signature = MessageSignature.empty();
+  } else {
+    (cloned as MultiSigSpendingCondition).fields = [];
   }
 
-  singleSig(): boolean {
-    if (
-      this.addressHashMode === AddressHashMode.SerializeP2PKH ||
-      this.addressHashMode === AddressHashMode.SerializeP2WPKH
-    ) {
-      return true;
-    } else {
-      return false;
-    }
-  }
+  return cloned;
+}
 
-  clear(): SpendingCondition {
-    const cleared = _.cloneDeep(this);
-    cleared.nonce = new BigNum(0);
-    cleared.fee = new BigNum(0);
-    cleared.signature = MessageSignature.empty();
-    return cleared;
-  }
+export function serializeSingleSigSpendingCondition(condition: SingleSigSpendingCondition): Buffer {
+  const bufferArray: BufferArray = new BufferArray();
+  bufferArray.appendByte(condition.hashMode);
+  bufferArray.appendHexString(condition.signer.hash160);
+  bufferArray.push(condition.nonce.toArrayLike(Buffer, 'be', 8));
+  bufferArray.push(condition.fee.toArrayLike(Buffer, 'be', 8));
+  bufferArray.appendByte(condition.keyEncoding);
+  bufferArray.push(condition.signature.serialize());
+  return bufferArray.concatBuffer();
+}
 
-  static makeSigHashPreSign(
-    curSigHash: string,
-    authType: AuthType,
-    fee: BigNum,
-    nonce: BigNum
-  ): string {
-    // new hash combines the previous hash and all the new data this signature will add. This
-    // includes:
-    // * the previous hash
-    // * the auth flag
-    // * the tx fee (big-endian 8-byte number)
-    // * nonce (big-endian 8-byte number)
-    const hashLength = 32 + 1 + 8 + 8;
+export function serializeMultiSigSpendingCondition(condition: MultiSigSpendingCondition): Buffer {
+  //TODO: unimplemented
+  return Buffer.from('');
+}
 
-    const sigHash =
-      curSigHash +
-      Buffer.from([authType]).toString('hex') +
-      fee.toArrayLike(Buffer, 'be', 8).toString('hex') +
-      nonce.toArrayLike(Buffer, 'be', 8).toString('hex');
+export function deserializeSingleSigSpendingCondition(
+  hashMode: SingleSigHashMode,
+  bufferReader: BufferReader
+): SingleSigSpendingCondition {
+  const signerPubKeyHash = bufferReader.readBuffer(20).toString('hex');
+  const signer = addressFromVersionHash(0, signerPubKeyHash);
+  const nonce = new BigNum(bufferReader.readBuffer(8).toString('hex'), 16);
+  const fee = new BigNum(bufferReader.readBuffer(8).toString('hex'), 16);
 
-    if (Buffer.from(sigHash, 'hex').byteLength !== hashLength) {
-      throw Error('Invalid signature hash length');
-    }
+  const keyEncoding = bufferReader.readUInt8Enum(PubKeyEncoding, n => {
+    throw new DeserializationError(`Could not parse ${n} as PubKeyEncoding`);
+  });
+  const signature = MessageSignature.deserialize(bufferReader);
 
-    return txidFromData(Buffer.from(sigHash, 'hex'));
-  }
+  return {
+    hashMode,
+    signer,
+    nonce,
+    fee,
+    keyEncoding,
+    signature,
+  };
+}
 
-  static makeSigHashPostSign(
-    curSigHash: string,
-    publicKey: StacksPublicKey,
-    signature: MessageSignature
-  ): string {
-    // new hash combines the previous hash and all the new data this signature will add.  This
-    // includes:
-    // * the public key compression flag
-    // * the signature
-    const hashLength = 32 + 1 + RECOVERABLE_ECDSA_SIG_LENGTH_BYTES;
-    const pubKeyEncoding = isCompressed(publicKey)
-      ? PubKeyEncoding.Compressed
-      : PubKeyEncoding.Uncompressed;
+export function deserializeMultiSigSpendingCondition(
+  hashMode: MultiSigHashMode,
+  bufferReader: BufferReader
+): MultiSigSpendingCondition {
+  //TODO: unimplemented
+  throw new NotImplementedError('multi sig deserialization');
+}
 
-    const sigHash = curSigHash + leftPadHex(pubKeyEncoding.toString(16)) + signature.toString();
-
-    if (Buffer.from(sigHash, 'hex').byteLength > hashLength) {
-      throw Error('Invalid signature hash length');
-    }
-
-    return new sha512_256().update(sigHash).digest('hex');
-  }
-
-  static nextSignature(
-    curSigHash: string,
-    authType: AuthType,
-    fee: BigNum,
-    nonce: BigNum,
-    privateKey: StacksPrivateKey
-  ): {
-    nextSig: MessageSignature;
-    nextSigHash: string;
-  } {
-    const sigHashPreSign = this.makeSigHashPreSign(curSigHash, authType, fee, nonce);
-    const signature = signWithKey(privateKey, sigHashPreSign);
-    const publicKey = getPublicKey(privateKey);
-    const nextSigHash = this.makeSigHashPostSign(sigHashPreSign, publicKey, signature);
-
-    return {
-      nextSig: signature,
-      nextSigHash,
-    };
-  }
-
-  numSignatures(): number {
-    return 0;
-  }
-
-  serialize(): Buffer {
-    const bufferArray: BufferArray = new BufferArray();
-
-    if (this.addressHashMode === undefined) {
-      throw new SerializationError('"addressHashMode" is undefined');
-    }
-    if (this.signerAddress === undefined) {
-      throw new SerializationError('"signerAddress" is undefined');
-    }
-    if (this.signerAddress.hash160 === undefined) {
-      throw new SerializationError('"signerAddress.data" is undefined');
-    }
-    if (this.nonce === undefined) {
-      throw new SerializationError('"nonce" is undefined');
-    }
-    if (this.fee === undefined) {
-      throw new SerializationError('"fee" is undefined');
-    }
-    bufferArray.appendByte(this.addressHashMode);
-    bufferArray.appendHexString(this.signerAddress.hash160);
-    bufferArray.push(this.nonce.toArrayLike(Buffer, 'be', 8));
-    bufferArray.push(this.fee.toArrayLike(Buffer, 'be', 8));
-
-    if (
-      this.addressHashMode === AddressHashMode.SerializeP2PKH ||
-      this.addressHashMode === AddressHashMode.SerializeP2WPKH
-    ) {
-      if (this.pubKeyEncoding === undefined) {
-        throw new SerializationError('"pubKeyEncoding" is undefined');
-      }
-      bufferArray.appendByte(this.pubKeyEncoding);
-      bufferArray.push(this.signature.serialize());
-    } else if (
-      this.addressHashMode === AddressHashMode.SerializeP2SH ||
-      this.addressHashMode === AddressHashMode.SerializeP2WSH
-    ) {
-      // TODO
-      throw new NotImplementedError(
-        `Not yet implemented: serializing AddressHashMode: ${this.addressHashMode}`
-      );
-    }
-
-    return bufferArray.concatBuffer();
-  }
-
-  deserialize(bufferReader: BufferReader) {
-    this.addressHashMode = bufferReader.readUInt8Enum(AddressHashMode, n => {
-      throw new DeserializationError(`Could not parse ${n} as AddressHashMode`);
-    });
-    const signerPubKeyHash = bufferReader.readBuffer(20).toString('hex');
-    this.signerAddress = addressFromVersionHash(0, signerPubKeyHash);
-    this.nonce = new BigNum(bufferReader.readBuffer(8).toString('hex'), 16);
-    this.fee = new BigNum(bufferReader.readBuffer(8).toString('hex'), 16);
-
-    if (
-      this.addressHashMode === AddressHashMode.SerializeP2PKH ||
-      this.addressHashMode === AddressHashMode.SerializeP2WPKH
-    ) {
-      this.pubKeyEncoding = bufferReader.readUInt8Enum(PubKeyEncoding, n => {
-        throw new DeserializationError(`Could not parse ${n} as PubKeyEncoding`);
-      });
-      this.signature = MessageSignature.deserialize(bufferReader);
-    } else if (
-      this.addressHashMode === AddressHashMode.SerializeP2SH ||
-      this.addressHashMode === AddressHashMode.SerializeP2WSH
-    ) {
-      throw new DeserializationError('not implemented');
-      // TODO
-    }
+export function serializeSpendingCondition(condition: SpendingCondition): Buffer {
+  if (isSingleSig(condition)) {
+    return serializeSingleSigSpendingCondition(condition as SingleSigSpendingCondition);
+  } else {
+    return serializeMultiSigSpendingCondition(condition as MultiSigSpendingCondition);
   }
 }
 
-export class SingleSigSpendingCondition extends SpendingCondition {
-  constructor(addressHashMode?: AddressHashMode, pubKey?: string, nonce?: BigNum, fee?: BigNum) {
-    super(addressHashMode, pubKey, nonce, fee);
-    this.signaturesRequired = 1;
-  }
+export function deserializeSpendingCondition(bufferReader: BufferReader): SpendingCondition {
+  const hashMode = bufferReader.readUInt8Enum(AddressHashMode, n => {
+    throw new DeserializationError(`Could not parse ${n} as AddressHashMode`);
+  });
 
-  numSignatures(): number {
-    return this.signature.toString() === MessageSignature.empty().toString() ? 0 : 1;
+  if (hashMode === AddressHashMode.SerializeP2PKH || hashMode === AddressHashMode.SerializeP2WPKH) {
+    return deserializeSingleSigSpendingCondition(hashMode, bufferReader);
+  } else {
+    return deserializeMultiSigSpendingCondition(hashMode, bufferReader);
   }
 }
 
-export class MultiSigSpendingCondition extends SpendingCondition {
-  // TODO
+export function makeSigHashPreSign(
+  curSigHash: string,
+  authType: AuthType,
+  fee: BigNum,
+  nonce: BigNum
+): string {
+  // new hash combines the previous hash and all the new data this signature will add. This
+  // includes:
+  // * the previous hash
+  // * the auth flag
+  // * the tx fee (big-endian 8-byte number)
+  // * nonce (big-endian 8-byte number)
+  const hashLength = 32 + 1 + 8 + 8;
+
+  const sigHash =
+    curSigHash +
+    Buffer.from([authType]).toString('hex') +
+    fee.toArrayLike(Buffer, 'be', 8).toString('hex') +
+    nonce.toArrayLike(Buffer, 'be', 8).toString('hex');
+
+  if (Buffer.from(sigHash, 'hex').byteLength !== hashLength) {
+    throw Error('Invalid signature hash length');
+  }
+
+  return txidFromData(Buffer.from(sigHash, 'hex'));
+}
+
+function makeSigHashPostSign(
+  curSigHash: string,
+  publicKey: StacksPublicKey,
+  signature: MessageSignature
+): string {
+  // new hash combines the previous hash and all the new data this signature will add.  This
+  // includes:
+  // * the public key compression flag
+  // * the signature
+  const hashLength = 32 + 1 + RECOVERABLE_ECDSA_SIG_LENGTH_BYTES;
+  const pubKeyEncoding = isCompressed(publicKey)
+    ? PubKeyEncoding.Compressed
+    : PubKeyEncoding.Uncompressed;
+
+  const sigHash = curSigHash + leftPadHex(pubKeyEncoding.toString(16)) + signature.toString();
+
+  if (Buffer.from(sigHash, 'hex').byteLength > hashLength) {
+    throw Error('Invalid signature hash length');
+  }
+
+  return new sha512_256().update(sigHash).digest('hex');
+}
+
+export function nextSignature(
+  curSigHash: string,
+  authType: AuthType,
+  fee: BigNum,
+  nonce: BigNum,
+  privateKey: StacksPrivateKey
+): {
+  nextSig: MessageSignature;
+  nextSigHash: string;
+} {
+  const sigHashPreSign = makeSigHashPreSign(curSigHash, authType, fee, nonce);
+  const signature = signWithKey(privateKey, sigHashPreSign);
+  const publicKey = getPublicKey(privateKey);
+  const nextSigHash = makeSigHashPostSign(sigHashPreSign, publicKey, signature);
+
+  return {
+    nextSig: signature,
+    nextSigHash,
+  };
 }
 
 export class Authorization extends Deserializable {
@@ -293,11 +288,15 @@ export class Authorization extends Deserializable {
   }
 
   intoInitialSighashAuth(): Authorization {
-    if (this.authType === AuthType.Standard) {
-      return new Authorization(AuthType.Standard, this.spendingCondition?.clear());
-    } else {
-      return new Authorization(AuthType.Sponsored, this.spendingCondition?.clear());
+    if (this.spendingCondition) {
+      if (this.authType === AuthType.Standard) {
+        return new Authorization(AuthType.Standard, clearCondition(this.spendingCondition));
+      } else {
+        return new Authorization(AuthType.Sponsored, clearCondition(this.spendingCondition));
+      }
     }
+
+    throw new Error('Authorization missing SpendingCondition');
   }
 
   setFee(amount: BigNum) {
@@ -320,7 +319,7 @@ export class Authorization extends Deserializable {
         if (this.spendingCondition === undefined) {
           throw new SerializationError('"spendingCondition" is undefined');
         }
-        bufferArray.push(this.spendingCondition.serialize());
+        bufferArray.push(serializeSpendingCondition(this.spendingCondition));
         break;
       case AuthType.Sponsored:
         // TODO
@@ -341,7 +340,7 @@ export class Authorization extends Deserializable {
 
     switch (this.authType) {
       case AuthType.Standard:
-        this.spendingCondition = SpendingCondition.deserialize(bufferReader);
+        this.spendingCondition = deserializeSpendingCondition(bufferReader);
         break;
       case AuthType.Sponsored:
         // TODO

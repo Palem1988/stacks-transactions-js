@@ -78,6 +78,9 @@ enum AddressHashMode {
   SerializeP2WSH = 0x03,
 }
 
+type SingleSigHashMode = AddressHashMode.SerializeP2PKH | AddressHashMode.SerializeP2WPKH;
+type MultiSigHashMode = AddressHashMode.SerializeP2SH | AddressHashMode.SerializeP2WSH;
+
 enum AddressVersion {
   MainnetSingleSig = 22,
   MainnetMultiSig = 20,
@@ -177,6 +180,8 @@ export {
   PostConditionPrincipalID,
   AuthType,
   AddressHashMode,
+  SingleSigHashMode,
+  MultiSigHashMode,
   AddressVersion,
   PubKeyEncoding,
   FungibleConditionCode,

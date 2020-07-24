@@ -1,7 +1,9 @@
 import {
-  SpendingCondition,
   SingleSigSpendingCondition,
   MessageSignature,
+  createSingleSigSpendingCondition,
+  serializeSpendingCondition,
+  deserializeSpendingCondition,
 } from '../../src/authorization';
 
 import { addressFromVersionHash } from '../../src/types';
@@ -29,12 +31,14 @@ test('Single spending condition serialization and deserialization', () => {
   const fee = new BigNum(0);
   const pubKey = '03ef788b3830c00abe8f64f62dc32fc863bc0b2cafeb073b6c8e1c7657d9c2c3ab';
   const secretKey = 'edf9aee84d9b7abc145504dde6726c64f369d37ee34ded868fabd876c26570bc01';
-  const spendingCondition = new SingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
+  const spendingCondition = createSingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
   const emptySignature = MessageSignature.empty();
 
-  const serialized = spendingCondition.serialize();
-  const deserialized = SpendingCondition.deserialize(new BufferReader(serialized));
-  expect(deserialized.addressHashMode).toBe(addressHashMode);
+  const serialized = serializeSpendingCondition(spendingCondition);
+  const deserialized = deserializeSpendingCondition(
+    new BufferReader(serialized)
+  ) as SingleSigSpendingCondition;
+  expect(deserialized.hashMode).toBe(addressHashMode);
   expect(deserialized.nonce!.toNumber()).toBe(nonce.toNumber());
   expect(deserialized.fee!.toNumber()).toBe(fee.toNumber());
   expect(deserialized.signature.toString()).toBe(emptySignature.toString());
@@ -45,17 +49,17 @@ test('Single sig spending condition uncompressed', () => {
   const nonce = new BigNum(123);
   const fee = new BigNum(456);
   const pubKey = '';
-  const spendingCondition = new SingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
-  spendingCondition.signerAddress = addressFromVersionHash(
+  const spendingCondition = createSingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
+  spendingCondition.signer = addressFromVersionHash(
     AddressVersion.MainnetSingleSig,
     '11'.repeat(20)
   );
-  spendingCondition.pubKeyEncoding = PubKeyEncoding.Uncompressed;
+  spendingCondition.keyEncoding = PubKeyEncoding.Uncompressed;
 
   const signature = new MessageSignature('ff'.repeat(65));
   spendingCondition.signature = signature;
 
-  const serializedSpendingCondition = spendingCondition.serialize();
+  const serializedSpendingCondition = serializeSpendingCondition(spendingCondition);
 
   // prettier-ignore
   const spendingConditionBytesHex = [
@@ -87,17 +91,17 @@ test('Single sig wpkh spending condition compressed', () => {
   const nonce = new BigNum(345);
   const fee = new BigNum(456);
   const pubKey = '';
-  const spendingCondition = new SingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
-  spendingCondition.signerAddress = addressFromVersionHash(
+  const spendingCondition = createSingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
+  spendingCondition.signer = addressFromVersionHash(
     AddressVersion.MainnetSingleSig,
     '11'.repeat(20)
   );
-  spendingCondition.pubKeyEncoding = PubKeyEncoding.Compressed;
+  spendingCondition.keyEncoding = PubKeyEncoding.Compressed;
 
   const signature = new MessageSignature('fe'.repeat(65));
   spendingCondition.signature = signature;
 
-  const serializedSpendingCondition = spendingCondition.serialize();
+  const serializedSpendingCondition = serializeSpendingCondition(spendingCondition);
 
   // prettier-ignore
   const spendingConditionBytesHex = [
