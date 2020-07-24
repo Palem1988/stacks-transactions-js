@@ -25,7 +25,6 @@ import {
 import * as BigNum from 'bn.js';
 import { BufferReader } from './bufferReader';
 import { SerializationError, NotImplementedError, DeserializationError } from './errors';
-import { Buffer } from 'buffer';
 
 abstract class Deserializable {
   abstract serialize(): Buffer;
@@ -120,7 +119,7 @@ export function createSingleSigSpendingCondition(
   };
 }
 
-function isSingleSig(condition: SpendingCondition) {
+export function isSingleSig(condition: SpendingCondition) {
   return 'signature' in condition;
 }
 

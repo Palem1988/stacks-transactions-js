@@ -12,7 +12,13 @@ import {
   ChainID,
 } from './constants';
 
-import { Authorization, SpendingCondition } from './authorization';
+import {
+  Authorization,
+  SpendingCondition,
+  nextSignature,
+  isSingleSig,
+  SingleSigSpendingCondition,
+} from './authorization';
 
 import { BufferArray, txidFromData, sha512_256, fetchPrivate } from './utils';
 
@@ -99,15 +105,15 @@ export class StacksTransaction {
     if (condition.nonce === undefined) {
       throw new Error('"condition.nonce" is undefined');
     }
-    const { nextSig, nextSigHash } = SpendingCondition.nextSignature(
+    const { nextSig, nextSigHash } = nextSignature(
       curSigHash,
       authType,
       condition.fee,
       condition.nonce,
       privateKey
     );
-    if (condition.singleSig()) {
-      condition.signature = nextSig;
+    if (isSingleSig(condition)) {
+      (condition as SingleSigSpendingCondition).signature = nextSig;
     } else {
       // condition.pushSignature();
     }

@@ -1,6 +1,10 @@
 import { StacksTransaction, deserializeTransaction } from '../../src/transaction';
 
-import { StandardAuthorization, SingleSigSpendingCondition } from '../../src/authorization';
+import {
+  StandardAuthorization,
+  createSingleSigSpendingCondition,
+  SingleSigSpendingCondition,
+} from '../../src/authorization';
 
 import { TokenTransferPayload, createTokenTransferPayload } from '../../src/payload';
 
@@ -56,7 +60,7 @@ test('STX token transfer transaction serialization and deserialization', () => {
   const fee = new BigNum(0);
   const pubKey = '03ef788b3830c00abe8f64f62dc32fc863bc0b2cafeb073b6c8e1c7657d9c2c3ab';
   const secretKey = 'edf9aee84d9b7abc145504dde6726c64f369d37ee34ded868fabd876c26570bc01';
-  const spendingCondition = new SingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
+  const spendingCondition = createSingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
   const authType = AuthType.Standard;
   const authorization = new StandardAuthorization(spendingCondition);
 
@@ -85,7 +89,9 @@ test('STX token transfer transaction serialization and deserialization', () => {
   expect(deserialized.version).toBe(transactionVersion);
   expect(deserialized.chainId).toBe(chainId);
   expect(deserialized.auth.authType).toBe(authType);
-  expect(deserialized.auth.spendingCondition!.addressHashMode).toBe(addressHashMode);
+  expect((deserialized.auth.spendingCondition! as SingleSigSpendingCondition).hashMode).toBe(
+    addressHashMode
+  );
   expect(deserialized.auth.spendingCondition!.nonce!.toNumber()).toBe(nonce.toNumber());
   expect(deserialized.auth.spendingCondition!.fee!.toNumber()).toBe(fee.toNumber());
   expect(deserialized.anchorMode).toBe(anchorMode);
@@ -122,7 +128,7 @@ test('STX token transfer transaction fee setting', () => {
   const fee = new BigNum(0);
   const pubKey = '03ef788b3830c00abe8f64f62dc32fc863bc0b2cafeb073b6c8e1c7657d9c2c3ab';
   const secretKey = 'edf9aee84d9b7abc145504dde6726c64f369d37ee34ded868fabd876c26570bc01';
-  const spendingCondition = new SingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
+  const spendingCondition = createSingleSigSpendingCondition(addressHashMode, pubKey, nonce, fee);
   const authType = AuthType.Standard;
   const authorization = new StandardAuthorization(spendingCondition);
 
@@ -159,7 +165,9 @@ test('STX token transfer transaction fee setting', () => {
   expect(postSetFeeDeserialized.version).toBe(transactionVersion);
   expect(postSetFeeDeserialized.chainId).toBe(chainId);
   expect(postSetFeeDeserialized.auth.authType).toBe(authType);
-  expect(postSetFeeDeserialized.auth.spendingCondition!.addressHashMode).toBe(addressHashMode);
+  expect(
+    (postSetFeeDeserialized.auth.spendingCondition! as SingleSigSpendingCondition).hashMode
+  ).toBe(addressHashMode);
   expect(postSetFeeDeserialized.auth.spendingCondition!.nonce!.toNumber()).toBe(nonce.toNumber());
   expect(postSetFeeDeserialized.auth.spendingCondition!.fee!.toNumber()).toBe(setFee.toNumber());
   expect(postSetFeeDeserialized.anchorMode).toBe(anchorMode);
